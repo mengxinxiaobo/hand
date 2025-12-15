@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高级手语识别系统</title>
+    
+    <!-- 外部资源 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Tailwind CSS 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4F46E5', // 主色调 - 靛蓝色
+                        secondary: '#10B981', // 辅助色 - 绿色
+                        accent: '#F59E0B', // 强调色 - 橙色
+                        dark: '#1E293B',
+                        light: '#F8FAFC'
+                    },
+                    fontFamily: {
+                        inter: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        'card': '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                        'card-hover': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+                    }
+                },
+            }
+        }
+    </script>
+    
+    <!-- 自定义工具类 -->
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .text-shadow {
+                text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            }
+            .backdrop-blur {
+                backdrop-filter: blur(8px);
+            }
+            .animate-fade-in {
+                animation: fadeIn 0.5s ease-in-out;
+            }
+            .animate-slide-in {
+                animation: slideIn 0.3s ease-out;
+            }
+            .scrollbar-hidden::-webkit-scrollbar {
+                display: none;
+            }
+            .scrollbar-hidden {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+        }
+    </style>
+    
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body class="font-inter bg-gradient-to-br from-slate-50 to-slate-100 min-h-screen text-dark">
+    <!-- 顶部导航栏 -->
+    <header class="bg-white/80 backdrop-blur border-b border-slate-200 sticky top-0 z-50">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center">
+                <i class="fa fa-hand-paper-o text-primary text-2xl"></i>
+            </div>
+            
+            <nav class="hidden md:flex items-center space-x-6">
+                <a href="#" class="font-medium text-primary hover:text-primary/80 transition-colors">首页</a>
+                <a href="#learn" class="font-medium text-slate-600 hover:text-primary transition-colors">学习模式</a>
+                <a href="#about" class="font-medium text-slate-600 hover:text-primary transition-colors">关于</a>
+            </nav>
+            
+            <div class="flex items-center space-x-4">
+                <button id="theme-toggle" class="p-2 rounded-full hover:bg-slate-100 transition-colors">
+                    <i class="fa fa-moon-o text-slate-600"></i>
+                </button>
+                <button class="md:hidden p-2 rounded-full hover:bg-slate-100 transition-colors">
+                    <i class="fa fa-bars text-slate-600"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="container mx-auto px-4 py-8">
+
+        <!-- 状态卡片 -->
+        <div class="bg-white rounded-2xl shadow-card p-6 mb-8 animate-fade-in">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+                <div>
+                    <h2 class="text-[clamp(1.5rem,3vw,2rem)] font-bold text-dark">实时手语识别</h2>
+                    <p class="text-slate-500">将您的手放在摄像头前开始识别</p>
+                </div>
+                
+                <div class="mt-4 md:mt-0 flex items-center space-x-2 bg-slate-100 px-4 py-2 rounded-full">
+                    <span class="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="text-sm font-medium">实时模式</span>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- 视频区域 -->
+                <div class="lg:col-span-2 bg-dark rounded-xl overflow-hidden shadow-lg relative">
+                    <div class="aspect-video bg-black/90 flex items-center justify-center">
+                        <!-- 初始状态显示占位符 -->
+                        <div id="video-placeholder" class="text-center text-white/70">
+                            <i class="fa fa-video-camera text-6xl mb-4 block opacity-30"></i>
+                            <h3 class="text-xl font-bold">摄像头未启动</h3>
+                            <p class="mt-2">请点击控制面板中的「启动识别」按钮开始</p>
+                        </div>
+                        <!-- 视频流，初始隐藏 -->
+                        <img id="video-frame" src="" alt="摄像头视频流" class="w-full h-full object-contain hidden">
+                    </div>
+                    
+                    <!-- 视频控制覆盖层 -->
+                    <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4 hidden" id="video-controls">
+                        <div class="flex justify-between items-center">
+                            <div class="text-white">
+                                <h3 class="text-xl font-bold" id="current-prediction">等待识别...</h3>
+                                <p class="text-sm opacity-80" id="current-confidence">置信度: 0%</p>
+                            </div>
+                            
+                            <div class="flex items-center space-x-3">
+                                <button id="toggle-landmarks" class="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors">
+                                    <i class="fa fa-dot-circle-o"></i>
+                                </button>
+                                <button id="refresh-camera" class="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors">
+                                    <i class="fa fa-refresh"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 控制面板 -->
+                <div class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-card">
+                    <div class="bg-primary p-4">
+                        <h3 class="text-white font-bold text-lg">控制面板</h3>
+                    </div>
+                    
+                    <div class="p-5 space-y-5">
+                        <!-- 模式切换 -->
+                        <div>
+                            <h4 class="font-medium mb-2 text-slate-700">操作模式</h4>
+                            <div class="flex flex-wrap gap-2">
+                                <button id="mode-recognition" class="flex-1 py-2 px-3 rounded-lg bg-primary text-white font-medium transition-all">
+                                    <i class="fa fa-eye mr-2"></i>识别模式
+                                </button>
+                                <button id="mode-learning" class="flex-1 py-2 px-3 rounded-lg bg-slate-200 text-slate-700 font-medium hover:bg-slate-300 transition-all">
+                                    <i class="fa fa-book mr-2"></i>学习模式
+                                </button>
+                                <button id="mode-demo" class="flex-1 py-2 px-3 rounded-lg bg-slate-200 text-slate-700 font-medium hover:bg-slate-300 transition-all">
+                                    <i class="fa fa-play-circle-o mr-2"></i>演示模式
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 启动按钮 -->
+                        <div class="pt-4">
+                            <button id="start-recognition" class="w-full py-3 bg-secondary text-white font-bold rounded-lg hover:bg-secondary/90 transition-all shadow-lg shadow-secondary/20 flex items-center justify-center">
+                                <i class="fa fa-play-circle text-xl mr-2"></i>
+                                <span>启动识别</span>
+                            </button>
+                        </div>
+                        
+                        <!-- 参数控制 -->
+                        <div class="grid grid-cols-1 gap-4">
+                            <!-- 置信度阈值 -->
+                            <div>
+                                <div class="flex justify-between items-center mb-2">
+                                    <h4 class="font-medium text-slate-700">置信度阈值</h4>
+                                    <span id="threshold-value" class="text-sm font-medium text-primary">60%</span>
+                                </div>
+                                <input type="range" id="confidence-slider" min="0.1" max="1.0" step="0.05" value="0.6" 
+                                       class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-primary">
+                            </div>
+                            
+                            <!-- 平滑窗口 -->
+                            <div>
+                                <div class="flex justify-between items-center mb-2">
+                                    <h4 class="font-medium text-slate-700">平滑窗口</h4>
+                                    <span id="smooth-window-value" class="text-sm font-medium text-primary">3</span>
+                                </div>
+                                <input type="range" id="smooth-slider" min="1" max="10" step="1" value="3" 
+                                       class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-primary">
+                            </div>
+                        </div>
+                        
+                        <!-- 选项设置 -->
+                        <div class="space-y-3">
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" id="is-recording" class="rounded text-primary focus:ring-primary/50 border-slate-300">
+                                <span class="text-slate-700">记录识别结果</span>
+                            </label>
+                            
+                            <div class="relative pt-1">
+                                <div class="flex items-center justify-between">
+                                    <h4 class="font-medium text-slate-700">识别语言</h4>
+                                </div>
+                                <select class="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary mt-2">
+                                    <option>中国手语字母</option>
+                                    <option>美国手语字母</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- 动作按钮 -->
+                        <div class="pt-3 grid grid-cols-2 gap-3">
+                            <button id="clear-history" class="py-3 bg-red-50 text-red-600 font-medium rounded-lg hover:bg-red-100 transition-colors">
+                                <i class="fa fa-trash mr-2"></i>清除历史
+                            </button>
+                            <button id="reset-statistics" class="py-3 bg-orange-50 text-orange-600 font-medium rounded-lg hover:bg-orange-100 transition-colors">
+                                <i class="fa fa-refresh mr-2"></i>重置统计
+                            </button>
+                            <button id="export-data" class="col-span-2 py-3 bg-green-50 text-green-600 font-medium rounded-lg hover:bg-green-100 transition-colors">
+                                <i class="fa fa-download mr-2"></i>导出数据
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 历史记录和统计区域 -->
+        <div class="bg-white rounded-2xl shadow-card p-6 mb-8 animate-slide-in">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-bold text-dark">识别历史与统计</h2>
+                <span id="history-count" class="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-sm">0 条记录</span>
+            </div>
+            
+            <!-- 统计信息卡片 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <p class="text-sm text-slate-500 mb-1">总识别次数</p>
+                    <p id="total-predictions" class="text-2xl font-bold text-primary">0</p>
+                </div>
+                <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <p class="text-sm text-slate-500 mb-1">当前FPS</p>
+                    <p id="current-fps" class="text-2xl font-bold text-primary">0</p>
+                </div>
+                <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <p class="text-sm text-slate-500 mb-1">最常见手势</p>
+                    <p id="most-common-gesture" class="text-2xl font-bold text-primary">-</p>
+                </div>
+                <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <p class="text-sm text-slate-500 mb-1">手部状态</p>
+                    <p id="hand-status" class="text-2xl font-bold text-red-500">未检测</p>
+                </div>
+            </div>
+            
+            <!-- 手势分布图表 -->
+            <div class="bg-slate-50 rounded-xl p-4 border border-slate-100 mb-6">
+                <h3 class="text-lg font-semibold mb-4 text-slate-700">手势分布</h3>
+                <div class="h-64">
+                    <canvas id="gesture-chart"></canvas>
+                </div>
+            </div>
+            
+            <!-- 历史记录表格 -->
+            <h3 class="text-lg font-semibold mb-4 text-slate-700">最近识别记录</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200">
+                            <th class="py-3 px-4 text-left text-sm font-medium text-slate-500">序号</th>
+                            <th class="py-3 px-4 text-left text-sm font-medium text-slate-500">识别结果</th>
+                            <th class="py-3 px-4 text-left text-sm font-medium text-slate-500">置信度</th>
+                            <th class="py-3 px-4 text-left text-sm font-medium text-slate-500">时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body">
+                        <tr>
+                            <td colspan="4" class="py-8 text-center text-slate-500">
+                                <i class="fa fa-history text-3xl mb-2 block opacity-30"></i>
+                                暂无识别历史
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- 学习模式区域 -->
+        <div id="learn" class="bg-white rounded-2xl shadow-card p-6 mb-8 animate-slide-in">
+            <h2 class="text-xl font-bold text-dark mb-6">手势学习中心</h2>
+            
+            <!-- 模式切换按钮 -->
+            <div class="flex gap-2 mb-6" id="learn-mode-buttons">
+                <button id="btn-identify-mode" class="mode-btn px-4 py-2 rounded-lg border transition-colors">
+                    识别模式
+                </button>
+                <button id="btn-learn-mode" class="mode-btn px-4 py-2 rounded-lg border bg-primary text-white transition-colors">
+                    学习模式
+                </button>
+                <button id="btn-demo-mode" class="mode-btn px-4 py-2 rounded-lg border transition-colors">
+                    演示模式
+                </button>
+            </div>
+            
+            <!-- 搜索和筛选 -->
+            <div class="mb-6 flex flex-col sm:flex-row gap-4">
+                <div class="flex-grow relative">
+                    <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input type="text" id="gesture-search" placeholder="搜索手势..." 
+                           class="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary">
+                </div>
+                <div>
+                    <select id="gesture-category" class="w-full sm:w-40 p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary">
+                        <option value="all">所有类别</option>
+                        <option value="letters">字母</option>
+                        <option value="numbers">数字</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- 手势指南 -->
+            <div id="gesture-guide" class="mb-6 p-5 bg-primary/5 rounded-xl border border-primary/20 hidden">
+                <h3 class="text-xl font-bold mb-4" id="guide-title">手势指南</h3>
+                <div class="flex flex-col md:flex-row gap-6">
+                    <div class="md:w-1/3">
+                        <div id="guide-image" class="aspect-square bg-slate-100 rounded-lg flex items-center justify-center">
+                            <span id="guide-letter" class="text-6xl font-bold text-primary">A</span>
+                        </div>
+                    </div>
+                    <div class="md:w-2/3">
+                        <h4 class="font-semibold text-slate-700 mb-2">如何操作:</h4>
+                        <p id="guide-description" class="text-slate-600 mb-4">手势描述将显示在这里。</p>
+                        <h4 class="font-semibold text-slate-700 mb-2">小贴士:</h4>
+                        <ul id="guide-tips" class="text-slate-600 space-y-1 list-disc list-inside">
+                            <li>确保手部在摄像头可见范围内</li>
+                            <li>保持手部稳定</li>
+                            <li>光线充足有助于提高识别准确率</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 手势卡片网格 -->
+            <div id="gesture-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-10 gap-3">
+                {% for gesture in gestures %}
+                <button class="gesture-card aspect-square rounded-xl border border-slate-200 flex flex-col items-center justify-center p-3 hover:border-primary hover:shadow-md transition-all">
+                    <span class="text-2xl font-bold text-primary mb-1">{{ gesture }}</span>
+                    <span class="text-xs text-slate-500">{{ gesture }}</span>
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+    </main>
+    
+    <!-- 页脚 -->
+    <footer class="bg-dark text-white py-10">
+        <div class="container mx-auto px-4">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <div class="flex items-center space-x-2 mb-4">
+                        <i class="fa fa-hand-paper-o text-primary text-2xl"></i>
+                        <h2 class="text-xl font-bold">高级手语识别系统</h2>
+                    </div>
+                    <p class="text-slate-400">
+                        本系统使用先进的计算机视觉和机器学习技术，实现实时手语识别，
+                        帮助听障人士与健听人士之间的沟通交流。
+                    </p>
+                </div>
+                
+                <div>
+                    <h3 class="font-bold text-lg mb-4">快速链接</h3>
+                    <ul class="space-y-2 text-slate-400">
+                        <li><a href="#" class="hover:text-primary transition-colors">首页</a></li>
+                        <li><a href="#learn" class="hover:text-primary transition-colors">学习模式</a></li>
+                        <li><a href="#" class="hover:text-primary transition-colors">手势指南</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="font-bold text-lg mb-4">关于</h3>
+                    <ul class="space-y-2 text-slate-400">
+                        <li><a href="#about" class="hover:text-primary transition-colors">关于我们</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="font-bold text-lg mb-4">联系我们</h3>
+                    <ul class="space-y-3 text-slate-400">
+                        <li class="flex items-start">
+                            <i class="fa fa-envelope-o mt-1 mr-3 text-primary"></i>
+                            <span>沈阳工业大学</span>
+                        </li>
+                        <li class="flex items-start">
+                            <i class="fa fa-github mt-1 mr-3 text-primary"></i>
+                            <span>计算机技术</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="border-t border-slate-800 mt-8 pt-8 text-center text-slate-500 text-sm">
+                <p>&copy; {{ current_year }} 高级手语识别系统. 保留所有权利.</p>
+            </div>
+        </div>
+    </footer>
+    
+    <!-- JavaScript -->
+    <script>
+        // 初始化变量
+        let predictionHistory = [];
+        let showLandmarks = true;
+        let currentMode = 'recognition';
+        let confidenceThreshold = 0.6;
+        let smoothWindow = 3;
+        let isRecording = false;
+        let isRunning = false; // 新增：跟踪识别是否正在运行
+        let gestureChart = null;
+        
+        // 初始化手势分布图表
+        function initGestureChart() {
+            const ctx = document.getElementById('gesture-chart').getContext('2d');
+            gestureChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '识别次数',
+                        data: [],
+                        backgroundColor: 'rgba(79, 70, 229, 0.6)',
+                        borderColor: 'rgba(79, 70, 229, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 更新系统状态的函数
+async function updateSystemState() {
+            try {
+                const response = await fetch('/api/state');
+                const data = await response.json();
+
+                // 🟢 核心修改：直接读取滑块当前的实时数值，谁都别想覆盖它！
+                const sliderValue = parseFloat(document.getElementById('confidence-slider').value);
+
+                // 更新UI显示
+                // 只有当：有预测结果 且 后端传来的置信度 >= 滑块当前的值
+                if (data.last_prediction && data.last_confidence >= sliderValue) {
+
+                    document.getElementById('current-prediction').textContent = `识别结果: ${data.last_prediction}`;
+                    // 显示百分比
+                    document.getElementById('current-confidence').textContent = `置信度: ${(data.last_confidence * 100).toFixed(0)}%`;
+
+                    // 颜色逻辑...
+
+                } else {
+                    // 🔴 只要低于滑块值，一律显示“等待”
+                    document.getElementById('current-prediction').textContent = '等待识别...';
+
+                    // 即使处于等待状态，也可以显示当前的实时置信度（方便你调试），或者显示0%
+                    // 如果你想看它是怎么“失败”的，可以用下面这行：
+                    // document.getElementById('current-confidence').textContent = `当前: ${(data.last_confidence * 100).toFixed(0)}% (未达标)`;
+
+                    // 如果你想让界面干净点，就用这行：
+                    document.getElementById('current-confidence').textContent = '置信度不足';
+                }
+
+                // ... 后面的更新历史记录、图表等代码保持不变 ...
+
+
+                // 更新历史记录（如果有新的预测）
+                if (data.prediction_history && data.prediction_history.length > predictionHistory.length) {
+                    predictionHistory = data.prediction_history;
+                    updateHistoryTable();
+                }
+
+                // 更新模式状态
+                if (data.mode !== currentMode) {
+                    currentMode = data.mode;
+                    updateModeButtons();
+                }
+
+                // 更新统计信息
+                document.getElementById('total-predictions').textContent = data.total_predictions || 0;
+                document.getElementById('current-fps').textContent = data.performance_metrics?.frame_rate || 0;
+
+                // 更新手部状态
+                const handStatus = document.getElementById('hand-status');
+                if (data.hand_detected) {
+                    handStatus.textContent = '已检测';
+                    handStatus.className = 'text-2xl font-bold text-green-500';
+                } else {
+                    handStatus.textContent = '未检测';
+                    handStatus.className = 'text-2xl font-bold text-red-500';
+                }
+
+                // 更新手势统计图表
+                if (data.gesture_statistics && gestureChart) {
+                    const gestures = Object.keys(data.gesture_statistics);
+                    const counts = Object.values(data.gesture_statistics);
+
+                    // 找出最常见的手势
+                    if (gestures.length > 0) {
+                        let maxCount = 0;
+                        let mostCommon = '-';
+                        for (const [gesture, count] of Object.entries(data.gesture_statistics)) {
+                            if (count > maxCount) {
+                                maxCount = count;
+                                mostCommon = gesture;
+                            }
+                        }
+                        document.getElementById('most-common-gesture').textContent = mostCommon;
+                    }
+
+                    // 更新图表数据
+                    gestureChart.data.labels = gestures;
+                    gestureChart.data.datasets[0].data = counts;
+                    gestureChart.update();
+                }
+
+                // 更新状态变量
+                // showLandmarks = data.show_landmarks;
+                // confidenceThreshold = data.confidence_threshold;
+
+            } catch (error) {
+                console.error('获取状态失败:', error);
+            }
+        }
+        
+        // 更新历史记录表
+        function updateHistoryTable() {
+            const tableBody = document.getElementById('history-table-body');
+            const historyCount = document.getElementById('history-count');
+            
+            if (predictionHistory.length === 0) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="py-8 text-center text-slate-500">
+                            <i class="fa fa-history text-3xl mb-2 block opacity-30"></i>
+                            暂无识别历史
+                        </td>
+                    </tr>
+                `;
+                historyCount.textContent = '0 条记录';
+                return;
+            }
+            
+            historyCount.textContent = `${predictionHistory.length} 条记录`;
+            
+            let rows = '';
+            predictionHistory.slice(-10).forEach((item, index) => {
+                const timestamp = new Date().toLocaleTimeString();
+                const confidenceClass = item[1] > 0.7 ? 'text-green-600' : item[1] > 0.5 ? 'text-orange-600' : 'text-red-600';
+                
+                rows += `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                        <td class="py-3 px-4 text-sm text-slate-500">${index + 1}</td>
+                        <td class="py-3 px-4 font-medium">${item[0]}</td>
+                        <td class="py-3 px-4 text-sm ${confidenceClass}">${(item[1] * 100).toFixed(0)}%</td>
+                        <td class="py-3 px-4 text-sm text-slate-500">${timestamp}</td>
+                    </tr>
+                `;
+            });
+            
+            tableBody.innerHTML = rows;
+        }
+        
+        // 更新模式按钮状态并切换UI显示
+        function updateModeButtons() {
+            const recognitionBtn = document.getElementById('mode-recognition');
+            const learningBtn = document.getElementById('mode-learning');
+            const demoBtn = document.getElementById('mode-demo');
+            
+            // 获取学习模式区域的按钮
+            const learnRecognitionBtn = document.getElementById('learn-mode-buttons')?.querySelector('#btn-identify-mode');
+            const learnLearningBtn = document.getElementById('learn-mode-buttons')?.querySelector('#btn-learn-mode');
+            const learnDemoBtn = document.getElementById('learn-mode-buttons')?.querySelector('#btn-demo-mode');
+            
+            // 获取演示模式区域的按钮
+            const demoRecognitionBtn = document.getElementById('demo-mode-buttons')?.querySelector('#demo-btn-identify-mode');
+            const demoLearningBtn = document.getElementById('demo-mode-buttons')?.querySelector('#demo-btn-learn-mode');
+            const demoDemoBtn = document.getElementById('demo-mode-buttons')?.querySelector('#demo-btn-demo-mode');
+            
+            // 重置主控制面板的按钮
+            [recognitionBtn, learningBtn, demoBtn].forEach(btn => {
+                btn.classList.remove('bg-primary', 'text-white');
+                btn.classList.add('bg-slate-200', 'text-slate-700');
+            });
+            
+            // 重置学习模式区域的按钮
+            [learnRecognitionBtn, learnLearningBtn, learnDemoBtn].forEach(btn => {
+                if (btn) {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('border-slate-300');
+                }
+            });
+            
+            // 重置演示模式区域的按钮
+            [demoRecognitionBtn, demoLearningBtn, demoDemoBtn].forEach(btn => {
+                if (btn) {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('border-slate-300');
+                }
+            });
+            
+            // 激活当前模式按钮并切换UI显示
+            if (currentMode === 'recognition') {
+                recognitionBtn.classList.remove('bg-slate-200', 'text-slate-700');
+                recognitionBtn.classList.add('bg-primary', 'text-white');
+                
+                // 更新学习模式区域的识别模式按钮
+                if (learnRecognitionBtn) {
+                    learnRecognitionBtn.classList.remove('border-slate-300');
+                    learnRecognitionBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 更新演示模式区域的识别模式按钮
+                if (demoRecognitionBtn) {
+                    demoRecognitionBtn.classList.remove('border-slate-300');
+                    demoRecognitionBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 显示识别模式相关UI
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-fade-in').classList.remove('hidden'); // 状态卡片
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-slide-in').classList.remove('hidden'); // 历史记录和统计
+                document.getElementById('learn').classList.add('hidden'); // 隐藏学习模式
+                
+                // 如果存在演示模式区域，隐藏它
+                const demoSection = document.getElementById('demo');
+                if (demoSection) demoSection.classList.add('hidden');
+                
+            } else if (currentMode === 'learning') {
+                learningBtn.classList.remove('bg-slate-200', 'text-slate-700');
+                learningBtn.classList.add('bg-primary', 'text-white');
+                
+                // 更新学习模式区域的学习模式按钮
+                if (learnLearningBtn) {
+                    learnLearningBtn.classList.remove('border-slate-300');
+                    learnLearningBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 更新演示模式区域的学习模式按钮
+                if (demoLearningBtn) {
+                    demoLearningBtn.classList.remove('border-slate-300');
+                    demoLearningBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 隐藏识别模式相关UI，显示学习模式
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-fade-in').classList.add('hidden'); // 状态卡片
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-slide-in').classList.add('hidden'); // 历史记录和统计
+                document.getElementById('learn').classList.remove('hidden'); // 显示学习模式
+                
+                // 如果存在演示模式区域，隐藏它
+                const demoSection = document.getElementById('demo');
+                if (demoSection) demoSection.classList.add('hidden');
+                
+            } else if (currentMode === 'demo') {
+                demoBtn.classList.remove('bg-slate-200', 'text-slate-700');
+                demoBtn.classList.add('bg-primary', 'text-white');
+                
+                // 更新学习模式区域的演示模式按钮
+                if (learnDemoBtn) {
+                    learnDemoBtn.classList.remove('border-slate-300');
+                    learnDemoBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 更新演示模式区域的演示模式按钮
+                if (demoDemoBtn) {
+                    demoDemoBtn.classList.remove('border-slate-300');
+                    demoDemoBtn.classList.add('bg-primary', 'text-white');
+                }
+                
+                // 隐藏识别模式相关UI，检查并显示演示模式
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-fade-in').classList.add('hidden'); // 状态卡片
+                document.querySelector('.bg-white.rounded-2xl.shadow-card.p-6.mb-8.animate-slide-in').classList.add('hidden'); // 历史记录和统计
+                document.getElementById('learn').classList.add('hidden'); // 隐藏学习模式
+                
+                // 如果演示模式区域不存在，创建一个简单的演示模式界面
+                let demoSection = document.getElementById('demo');
+                if (!demoSection) {
+                    demoSection = document.createElement('div');
+                    demoSection.id = 'demo';
+                    demoSection.className = 'bg-white rounded-2xl shadow-card p-6 mb-8 animate-slide-in';
+                    demoSection.innerHTML = `
+                        <h2 class="text-xl font-bold text-dark mb-6">演示模式</h2>
+                        
+                        <!-- 模式切换按钮 -->
+                        <div class="flex gap-2 mb-6" id="demo-mode-buttons">
+                            <button id="demo-btn-identify-mode" class="mode-btn px-4 py-2 rounded-lg border transition-colors">
+                                识别模式
+                            </button>
+                            <button id="demo-btn-learn-mode" class="mode-btn px-4 py-2 rounded-lg border transition-colors">
+                                学习模式
+                            </button>
+                            <button id="demo-btn-demo-mode" class="mode-btn px-4 py-2 rounded-lg border bg-primary text-white transition-colors">
+                                演示模式
+                            </button>
+                        </div>
+                        <div class="bg-slate-50 p-6 rounded-xl text-center">
+                            <i class="fa fa-play-circle text-6xl text-primary mb-4"></i>
+                            <h3 class="text-xl font-bold mb-2">手语演示</h3>
+                            <p class="text-slate-600 mb-6">观看常见手语手势的演示</p>
+                            <div class="grid grid-cols-3 md:grid-cols-5 gap-4">
+                                ${['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'].map(gesture => `
+                                    <button class="demo-gesture-btn bg-white border border-slate-200 rounded-lg p-4 hover:border-primary transition-all">
+                                        <span class="text-3xl font-bold text-primary">${gesture}</span>
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                    document.querySelector('main').appendChild(demoSection);
+                } else {
+                    demoSection.classList.remove('hidden');
+                }
+                
+                // 添加演示手势按钮的点击事件
+                document.querySelectorAll('.demo-gesture-btn').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                        const gesture = this.querySelector('span').textContent;
+                        showGestureGuide(gesture);
+                    });
+                });
+                
+                // 为演示模式区域的模式切换按钮添加事件监听器
+                if (document.getElementById('demo-mode-buttons')) {
+                    document.getElementById('demo-mode-buttons').querySelector('#demo-btn-identify-mode').addEventListener('click', function() {
+                        sendSettingsUpdate({ mode: 'recognition' });
+                    });
+                    
+                    document.getElementById('demo-mode-buttons').querySelector('#demo-btn-learn-mode').addEventListener('click', function() {
+                        sendSettingsUpdate({ mode: 'learning' });
+                    });
+                    
+                    document.getElementById('demo-mode-buttons').querySelector('#demo-btn-demo-mode').addEventListener('click', function() {
+                        sendSettingsUpdate({ mode: 'demo' });
+                    });
+                }
+            }
+        }
+        
+        // 发送设置更新
+        async function sendSettingsUpdate(settings) {
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(settings)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('更新设置失败');
+                }
+                
+                await response.json();
+                
+                // 更新客户端的currentMode变量（如果设置了mode）
+                if (settings.mode) {
+                    currentMode = settings.mode;
+                    // 确保所有区域的按钮状态正确更新
+                    updateModeButtons();
+                }
+            } catch (error) {
+                console.error('发送设置更新失败:', error);
+            }
+        }
+        
+        // 重置统计信息
+        async function resetStatistics() {
+            try {
+                const response = await fetch('/api/reset_statistics', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('重置统计失败');
+                }
+                
+                await response.json();
+                // 重置图表
+                if (gestureChart) {
+                    gestureChart.data.labels = [];
+                    gestureChart.data.datasets[0].data = [];
+                    gestureChart.update();
+                }
+                document.getElementById('total-predictions').textContent = '0';
+                document.getElementById('most-common-gesture').textContent = '-';
+            } catch (error) {
+                console.error('重置统计失败:', error);
+            }
+        }
+        
+        // 导出数据
+        async function exportData() {
+            try {
+                const response = await fetch('/api/state');
+                const data = await response.json();
+                
+                const exportData = {
+                    timestamp: new Date().toISOString(),
+                    prediction_history: data.prediction_history,
+                    gesture_statistics: data.gesture_statistics,
+                    performance_metrics: data.performance_metrics,
+                    total_predictions: data.total_predictions
+                };
+                
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `sign_language_data_${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error('导出数据失败:', error);
+            }
+        }
+        
+        // 显示手势指南
+        function showGestureGuide(gesture) {
+            const guide = document.getElementById('gesture-guide');
+            const guideTitle = document.getElementById('guide-title');
+            const guideLetter = document.getElementById('guide-letter');
+            const guideDescription = document.getElementById('guide-description');
+
+            guideTitle.textContent = `手势 ${gesture} 指南`;
+            guideLetter.textContent = gesture;
+
+            // 为不同的手势提供不同的描述
+            const descriptions = {
+                'A': '将手掌张开，拇指和食指形成一个圆圈，其他手指伸直。',
+                'B': '将手掌展开，所有手指伸直并并拢。',
+                'C': '将手掌弯曲成一个C形状，拇指和其他手指形成一个半圆。',
+                'D': '将手掌伸直，食指指向上方，其他手指弯曲并贴在手掌上。',
+                'E': '将所有手指弯曲，指尖触碰拇指，形成一个拳头但不完全握紧。',
+                'F': '将拇指和食指形成一个F形状，其他手指伸直。',
+                'G': '将手掌伸直，拇指和食指形成一个G形状，其他手指伸直。',
+                'H': '将手掌伸直，食指和中指伸直并分开，其他手指弯曲。',
+                'I': '将手掌伸直，只有食指伸直，其他手指弯曲贴在手掌上。',
+                'J': '先做I的手势，然后向下画一个J形状。',
+                'K': '将手掌伸直，食指和中指伸直并分开，拇指指向外侧。',
+                'L': '将拇指和食指形成一个L形状，其他手指弯曲。',
+                'M': '将拇指贴在手掌上，其他三个手指弯曲并并拢，形成M形状。',
+                'N': '将拇指贴在手掌上，中指和无名指弯曲并并拢，形成N形状。',
+                'O': '将所有手指弯曲，指尖相互触碰，形成一个圆形。',
+                'P': '将手掌伸直，拇指和食指形成一个P形状，其他手指伸直。',
+                'Q': '将所有手指弯曲，然后拇指向下指。',
+                'R': '将手掌伸直，食指和中指交叉，其他手指弯曲。',
+                'S': '握紧拳头，拇指放在食指和中指之间。',
+                'T': '将拇指放在食指上方，形成一个T形状。',
+                'U': '将拇指和食指伸直并分开，形成U形状。',
+                'V': '将食指和中指伸直并分开，形成V形状。',
+                'W': '将食指、中指和无名指伸直并分开，形成W形状。',
+                'X': '将食指交叉在中指上，形成X形状。',
+                'Y': '将拇指和小指伸直并分开，其他手指弯曲。',
+                'Z': '先做I的手势，然后在空中画一个Z形状。'
+            };
+
+            guideDescription.textContent = descriptions[gesture] || `手势 ${gesture} 的详细描述。`;
+            guide.classList.remove('hidden');
+        }
+        
+        // 清除历史记录
+        async function clearHistory() {
+            try {
+                const response = await fetch('/api/clear_history', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('清除历史记录失败');
+                }
+                
+                await response.json();
+                predictionHistory = [];
+                updateHistoryTable();
+            } catch (error) {
+                console.error('清除历史记录失败:', error);
+            }
+        }
+        
+        // 简化版滚动函数
+        function smoothScroll(targetId) {
+            console.log('smoothScroll 函数被调用，目标ID:', targetId);
+            
+            // 首页链接处理
+            if (targetId === '') {
+                console.log('首页链接，滚动到页面顶部');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
+            
+            // 查找目标元素
+            const targetElement = document.getElementById(targetId);
+            if (targetElement) {
+                console.log('找到目标元素:', targetId);
+                
+                // 如果是about元素且被隐藏，先显示它
+                if (targetId === 'about' && targetElement.classList.contains('hidden')) {
+                    console.log('显示about元素');
+                    targetElement.classList.remove('hidden');
+                }
+                
+                // 计算滚动位置
+                const targetPosition = targetElement.offsetTop - 80; // 减去导航栏高度
+                
+                // 使用原生的平滑滚动
+                window.scrollTo({ 
+                    top: targetPosition, 
+                    behavior: 'smooth' 
+                });
+            } else {
+                console.warn(`未找到目标元素: #${targetId}`);
+                // 作为备选方案，使用传统的锚点跳转
+                window.location.href = '#' + targetId;
+            }
+        }
+        
+        // 添加导航链接的点击事件监听器
+        function setupNavigation() {
+            console.log('setupNavigation 函数被调用');
+            // 获取所有导航链接，包括页脚中的链接
+            const navLinks = document.querySelectorAll('nav a, footer a[href^="#"]');
+            console.log('找到的导航链接数量:', navLinks.length);
+            
+            // 为每个链接设置事件处理
+            navLinks.forEach((link) => {
+                console.log('处理导航链接:', link.textContent, link.getAttribute('href'));
+                
+                // 设置链接样式
+                link.style.cursor = 'pointer';
+                
+                // 移除所有可能的旧事件监听器
+                link.onclick = function(e) {
+                    // 阻止默认行为
+                    e.preventDefault();
+                    
+                    console.log('导航链接被点击:', link.textContent, link.getAttribute('href'));
+                    
+                    // 获取目标ID
+                    const href = this.getAttribute('href');
+                    const targetId = href.substring(1); // 移除 # 符号
+                    console.log('滚动目标ID:', targetId);
+                    
+                    // 直接滚动到目标位置
+                    smoothScroll(targetId);
+                    
+                    // 阻止事件冒泡
+                    return false;
+                };
+            });
+        }
+        
+        // 添加事件监听器
+        document.addEventListener('DOMContentLoaded', function() {
+            // 设置导航功能
+            setupNavigation();
+            // 模式切换按钮
+            document.getElementById('mode-recognition').addEventListener('click', function() {
+                sendSettingsUpdate({ mode: 'recognition' });
+            });
+            
+            document.getElementById('mode-learning').addEventListener('click', function() {
+                sendSettingsUpdate({ mode: 'learning' });
+            });
+            
+            document.getElementById('mode-demo').addEventListener('click', function() {
+                sendSettingsUpdate({ mode: 'demo' });
+            });
+            
+            // 学习模式区域的模式切换按钮
+            if (document.getElementById('learn-mode-buttons')) {
+                document.getElementById('learn-mode-buttons').querySelector('#btn-identify-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'recognition' });
+                });
+                
+                document.getElementById('learn-mode-buttons').querySelector('#btn-learn-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'learning' });
+                });
+                
+                document.getElementById('learn-mode-buttons').querySelector('#btn-demo-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'demo' });
+                });
+            }
+            
+            // 演示模式区域的模式切换按钮
+            if (document.getElementById('demo-mode-buttons')) {
+                document.getElementById('demo-mode-buttons').querySelector('#demo-btn-identify-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'recognition' });
+                });
+                
+                document.getElementById('demo-mode-buttons').querySelector('#demo-btn-learn-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'learning' });
+                });
+                
+                document.getElementById('demo-mode-buttons').querySelector('#demo-btn-demo-mode').addEventListener('click', function() {
+                    sendSettingsUpdate({ mode: 'demo' });
+                });
+            }
+            
+            // 关键点显示切换
+            document.getElementById('toggle-landmarks').addEventListener('click', function() {
+                showLandmarks = !showLandmarks;
+                sendSettingsUpdate({ show_landmarks: showLandmarks });
+                
+                // 更新按钮图标
+                const icon = this.querySelector('i');
+                if (showLandmarks) {
+                    icon.classList.remove('fa-circle-o');
+                    icon.classList.add('fa-dot-circle-o');
+                } else {
+                    icon.classList.remove('fa-dot-circle-o');
+                    icon.classList.add('fa-circle-o');
+                }
+            });
+            
+            // 刷新摄像头
+            document.getElementById('refresh-camera').addEventListener('click', function() {
+                const videoFrame = document.getElementById('video-frame');
+                videoFrame.src = '/video_feed?' + new Date().getTime();
+            });
+            
+            // 置信度滑块
+            const thresholdSlider = document.getElementById('confidence-slider');
+            const thresholdValue = document.getElementById('threshold-value');
+            
+            thresholdSlider.addEventListener('input', function() {
+                confidenceThreshold = parseFloat(this.value);
+                thresholdValue.textContent = `${Math.round(confidenceThreshold * 100)}%`;
+            });
+            
+            thresholdSlider.addEventListener('change', function() {
+                sendSettingsUpdate({ confidence_threshold: confidenceThreshold });
+            });
+            
+            // 平滑窗口滑块
+            const smoothSlider = document.getElementById('smooth-slider');
+            const smoothValue = document.getElementById('smooth-window-value');
+            
+            smoothSlider.addEventListener('input', function() {
+                smoothWindow = parseInt(this.value);
+                smoothValue.textContent = smoothWindow;
+            });
+            
+            smoothSlider.addEventListener('change', function() {
+                sendSettingsUpdate({ smooth_window: smoothWindow });
+            });
+            
+            // 记录开关
+            const recordCheckbox = document.getElementById('is-recording');
+            recordCheckbox.addEventListener('change', function() {
+                isRecording = this.checked;
+                sendSettingsUpdate({ is_recording: isRecording });
+            });
+            
+            // 清除历史记录按钮
+            document.getElementById('clear-history').addEventListener('click', clearHistory);
+            
+            // 重置统计按钮
+            document.getElementById('reset-statistics').addEventListener('click', resetStatistics);
+            
+            // 导出数据按钮
+            document.getElementById('export-data').addEventListener('click', exportData);
+            
+            // 手势卡片点击
+            document.querySelectorAll('.gesture-card').forEach(card => {
+                card.addEventListener('click', function() {
+                    const gesture = this.querySelector('span:first-child').textContent;
+                    sendSettingsUpdate({
+                        mode: 'learning',
+                        current_gesture: gesture
+                    });
+                    
+                    // 显示手势指南
+                    showGestureGuide(gesture);
+                    
+                    // 高亮选中的卡片
+                    document.querySelectorAll('.gesture-card').forEach(c => {
+                        c.classList.remove('border-primary', 'bg-primary/5');
+                    });
+                    this.classList.add('border-primary', 'bg-primary/5');
+                });
+            });
+            
+            // 手势搜索
+            document.getElementById('gesture-search').addEventListener('input', function() {
+                const searchTerm = this.value.toLowerCase();
+                document.querySelectorAll('.gesture-card').forEach(card => {
+                    const gestureText = card.querySelector('span:first-child').textContent.toLowerCase();
+                    if (gestureText.includes(searchTerm)) {
+                        card.style.display = 'flex';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+            });
+            
+            // 手势分类筛选
+            document.getElementById('gesture-category').addEventListener('change', function() {
+                const category = this.value;
+                document.querySelectorAll('.gesture-card').forEach(card => {
+                    const gesture = card.querySelector('span:first-child').textContent;
+                    const isLetter = /^[A-Za-z]$/.test(gesture);
+                    const isNumber = /^\d$/.test(gesture);
+                    
+                    if (category === 'all' || 
+                        (category === 'letters' && isLetter) || 
+                        (category === 'numbers' && isNumber)) {
+                        card.style.display = 'flex';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+            });
+            
+            // 主题切换
+            document.getElementById('theme-toggle').addEventListener('click', function() {
+                const icon = this.querySelector('i');
+                if (icon.classList.contains('fa-moon-o')) {
+                    icon.classList.remove('fa-moon-o');
+                    icon.classList.add('fa-sun-o');
+                    // 这里可以添加暗色主题切换逻辑
+                } else {
+                    icon.classList.remove('fa-sun-o');
+                    icon.classList.add('fa-moon-o');
+                    // 恢复亮色主题
+                }
+            });
+            
+            // 启动按钮事件处理
+            const startButton = document.getElementById('start-recognition');
+            const videoFrame = document.getElementById('video-frame');
+            const videoPlaceholder = document.getElementById('video-placeholder');
+            const videoControls = document.getElementById('video-controls');
+            
+            startButton.addEventListener('click', function() {
+                isRunning = !isRunning;
+                
+                // 更新按钮状态和文本
+                const icon = this.querySelector('i');
+                const textSpan = this.querySelector('span');
+                
+                if (isRunning) {
+                    // 启动识别
+                    icon.className = 'fa fa-stop-circle text-xl mr-2';
+                    textSpan.textContent = '停止识别';
+                    this.classList.remove('bg-secondary', 'hover:bg-secondary/90', 'shadow-secondary/20');
+                    this.classList.add('bg-red-500', 'hover:bg-red-600', 'shadow-lg', 'shadow-red-200');
+                    
+                    // 直接调用toggle_recognition路由发送启动命令到后端
+                    fetch('/toggle_recognition', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ is_running: true })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('启动识别响应:', data);
+                    })
+                    .catch(error => {
+                        console.error('启动识别失败:', error);
+                        showNotification('启动识别失败', 'error');
+                        // 恢复按钮状态
+                        isRunning = false;
+                        icon.className = 'fa fa-play-circle text-xl mr-2';
+                        textSpan.textContent = '启动识别';
+                        this.classList.remove('bg-red-500', 'hover:bg-red-600', 'shadow-red-200');
+                        this.classList.add('bg-secondary', 'hover:bg-secondary/90', 'shadow-secondary/20');
+                    });
+                    
+                    // 显示视频流，隐藏占位符
+                    videoFrame.src = '/video_feed';
+                    videoFrame.classList.remove('hidden');
+                    videoPlaceholder.classList.add('hidden');
+                    videoControls.classList.remove('hidden');
+                    
+                    // 显示通知
+                    showNotification('识别已启动', 'success');
+                } else {
+                    // 停止识别
+                    icon.className = 'fa fa-play-circle text-xl mr-2';
+                    textSpan.textContent = '启动识别';
+                    this.classList.remove('bg-red-500', 'hover:bg-red-600', 'shadow-red-200');
+                    this.classList.add('bg-secondary', 'hover:bg-secondary/90', 'shadow-secondary/20');
+                    
+                    // 直接调用toggle_recognition路由发送停止命令到后端
+                    fetch('/toggle_recognition', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ is_running: false })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('停止识别响应:', data);
+                    })
+                    .catch(error => {
+                        console.error('停止识别失败:', error);
+                    });
+                    
+                    // 隐藏视频流，显示占位符
+                    videoFrame.src = '';
+                    videoFrame.classList.add('hidden');
+                    videoPlaceholder.classList.remove('hidden');
+                    videoControls.classList.add('hidden');
+                    
+                    // 显示通知
+                    showNotification('识别已停止', 'info');
+                }
+            });
+            
+            // 显示通知消息的函数
+            function showNotification(message, type = 'info') {
+                // 创建通知元素
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 transform transition-all duration-500 translate-x-full`;
+                
+                // 设置通知样式
+                let bgColor, textColor, iconClass;
+                switch(type) {
+                    case 'success':
+                        bgColor = 'bg-green-500';
+                        textColor = 'text-white';
+                        iconClass = 'fa-check-circle';
+                        break;
+                    case 'error':
+                        bgColor = 'bg-red-500';
+                        textColor = 'text-white';
+                        iconClass = 'fa-exclamation-circle';
+                        break;
+                    case 'warning':
+                        bgColor = 'bg-yellow-500';
+                        textColor = 'text-white';
+                        iconClass = 'fa-warning';
+                        break;
+                    default:
+                        bgColor = 'bg-primary';
+                        textColor = 'text-white';
+                        iconClass = 'fa-info-circle';
+                }
+                
+                notification.classList.add(...bgColor.split(' '), ...textColor.split(' '));
+                
+                // 设置通知内容
+                notification.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fa ${iconClass} mr-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+                
+                // 添加到页面
+                document.body.appendChild(notification);
+                
+                // 显示通知
+                setTimeout(() => {
+                    notification.classList.remove('translate-x-full');
+                }, 10);
+                
+                // 自动关闭
+                setTimeout(() => {
+                    notification.classList.add('translate-x-full');
+                    setTimeout(() => {
+                        document.body.removeChild(notification);
+                    }, 500);
+                }, 3000);
+            }
+            
+            // 设置初始阈值显示
+            thresholdValue.textContent = `${Math.round(confidenceThreshold * 100)}%`;
+            document.getElementById('smooth-window-value').textContent = smoothWindow;
+            
+            // 初始化图表
+            initGestureChart();
+            
+            // 初始化UI状态
+            const learnSection = document.getElementById('learn');
+            if (learnSection) learnSection.classList.add('hidden');
+            
+            // 调用updateModeButtons设置初始UI显示状态
+            updateModeButtons();
+            
+            // 定期更新状态
+            setInterval(updateSystemState, 150);
+        });
+    </script>
+</body>
+</html>
