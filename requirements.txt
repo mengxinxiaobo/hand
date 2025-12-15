@@ -1,6 +1,9 @@
+Flask==3.1.2
 mediapipe==0.10.21
 numpy==2.3.5
-opencv-python-headless==4.11.0.86
-scikit-learn==1.8.0
+
+opencv_python_headless==4.11.0.86
+scikit_learn==1.8.0
+setuptools==80.9.0
 streamlit==1.50.0
 
