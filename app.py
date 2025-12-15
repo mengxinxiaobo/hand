@@ -1,311 +1,162 @@
 import cv2
 import streamlit as st
-
 import numpy as np
-import time
-from hand_landmarks import HandLandmarkDetector
-from gesture_classifier import GestureClassifier
+import av
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 import threading
-import queue
+from collections import deque
 
-# 设置页面配置
+# 导入你的模型文件
+from hand_landmarks import HandLandmarkDetector
+
+# -------------------------------------------------------------
+# 兼容性处理：防止没有 gesture_classifier 文件导致报错
+try:
+    from gesture_classifier import GestureClassifier
+except ImportError:
+    # 模拟分类器（占位符）
+    class GestureClassifier:
+        def __init__(self):
+            self.LABELS = ['No Model', 'Test']
+        def predict(self, features):
+            return "Test", 0.0
+# -------------------------------------------------------------
+
+# 1. 页面配置
 st.set_page_config(
-    page_title="汉语手指字母识别",
+    page_title="汉语手指字母识别 (WebRTC)",
     page_icon="👋",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# 初始化检测器和分类器
-@st.cache_resource
-def init_models():
-    detector = HandLandmarkDetector()
-    classifier = GestureClassifier()
-    return detector, classifier
+# 2. WebRTC 配置 (关键！这是云端穿透内网必须的)
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
-detector, classifier = init_models()
-
-# 应用状态管理
-class AppState:
+# 3. 定义视频处理器 (WebRTC 的核心)
+class VideoProcessor(VideoTransformerBase):
     def __init__(self):
-        self.mode = 'recognition'  # recognition or learning
-        self.current_gesture = None
-        self.prediction_history = []
-        self.last_prediction = None
-        self.last_confidence = 0.0
-        self.show_landmarks = True
+        # 初始化模型
+        self.detector = HandLandmarkDetector()
+        self.classifier = GestureClassifier()
+        
+        # 状态参数 (从全局 session_state 或默认值获取)
         self.confidence_threshold = 0.6
-        self.gesture_statistics = {}
-        self.performance_metrics = {
-            'frame_rate': 0,
-            'detection_time': 0,
-            'classification_time': 0
-        }
-        self.hand_detected = False
-        self.smooth_predictions = []
         self.smooth_window = 5
-        self.history_size = 20
-        self.is_running = False
-        self.is_recording = False
-        self.demo_gesture = None
-
-state = AppState()
-
-# 视频流处理线程
-class VideoStreamProcessor:
-    def __init__(self):
-        self.video_queue = queue.Queue(maxsize=10)
-        self.running = False
-        self.cap = None
-    
-    def start(self):
-        self.running = True
-        self.thread = threading.Thread(target=self.process_video)
-        self.thread.daemon = True
-        self.thread.start()
-    
-    def stop(self):
-        self.running = False
-        if self.thread.is_alive():
-            self.thread.join(timeout=2)
-        if self.cap is not None:
-            self.cap.release()
-    
-    def process_video(self):
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            st.error("无法打开摄像头")
-            return
+        self.show_landmarks = True
         
-        frame_count = 0
-        start_time = time.time()
+        # 平滑队列
+        self.prediction_queue = deque(maxlen=self.smooth_window)
+        self.lock = threading.Lock() # 线程锁
+
+    def update_params(self, threshold, window, show_lm):
+        # 用于从 UI 线程更新参数
+        with self.lock:
+            self.confidence_threshold = threshold
+            self.smooth_window = window
+            self.prediction_queue = deque(maxlen=window)
+            self.show_landmarks = show_lm
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        """
+        每一帧都会在这个函数里被处理
+        """
+        # 1. 将 av.VideoFrame 转为 OpenCV 格式
+        img = frame.to_ndarray(format="bgr24")
         
-        while self.running:
-            # 计算帧率
-            frame_count += 1
-            if frame_count % 30 == 0:
-                elapsed = time.time() - start_time
-                state.performance_metrics['frame_rate'] = round(30 / elapsed, 1) if elapsed > 0 else 0
-                start_time = time.time()
-                frame_count = 0
-            
-            # 读取一帧
-            success, frame = self.cap.read()
-            if not success:
-                break
-            
-            # 水平翻转图像（镜像效果）
-            frame = cv2.flip(frame, 1)
-            
-            # 检测手部关键点
-            detection_start = time.time()
-            landmarks, annotated_frame = detector.detect(frame)
-            state.performance_metrics['detection_time'] = round((time.time() - detection_start) * 1000, 2)
-            
-            # 更新手部检测状态
-            state.hand_detected = landmarks is not None
-            
-            # 识别手势
-            prediction = None
-            confidence = 0.0
-            
-            if landmarks is not None:
-                # 提取特征
-                features = detector.extract_features(landmarks)
+        # 2. 镜像翻转
+        img = cv2.flip(img, 1)
+        
+        # 3. 获取当前参数
+        with self.lock:
+            thresh = self.confidence_threshold
+            show_lm = self.show_landmarks
+        
+        # 4. 手部检测
+        landmarks, annotated_frame = self.detector.detect(img)
+        
+        # 如果不显示骨架，就用原图
+        final_img = annotated_frame if (landmarks is not None and show_lm) else img
+        
+        # 5. 手势识别
+        if landmarks is not None:
+            features = self.detector.extract_features(landmarks)
+            if features is not None:
+                prediction, confidence = self.classifier.predict(features)
                 
-                if features is not None:
-                    # 预测手势
-                    classification_start = time.time()
-                    prediction, confidence = classifier.predict(features)
-                    state.performance_metrics['classification_time'] = round((time.time() - classification_start) * 1000, 2)
+                if confidence > thresh:
+                    # 平滑处理
+                    self.prediction_queue.append(prediction)
                     
-                    # 保存预测结果
-                    state.last_prediction = prediction
-                    state.last_confidence = confidence
-                    
-                    # 预测平滑处理
-                    state.smooth_predictions.append((prediction, confidence))
-                    if len(state.smooth_predictions) > state.smooth_window:
-                        state.smooth_predictions.pop(0)
-                    
-                    # 基于滑动窗口的平滑预测
-                    if len(state.smooth_predictions) >= state.smooth_window:
-                        # 计算窗口内的预测统计
-                        gesture_counts = {}
-                        for gest, conf in state.smooth_predictions:
-                            if conf > state.confidence_threshold:
-                                gesture_counts[gest] = gesture_counts.get(gest, 0) + 1
+                    # 统计窗口内最高频的手势
+                    if len(self.prediction_queue) >= 1:
+                        # 简单的投票机制
+                        final_prediction = max(set(self.prediction_queue), key=self.prediction_queue.count)
                         
-                        # 选择最常见的手势
-                        if gesture_counts:
-                            smoothed_prediction = max(gesture_counts, key=gesture_counts.get)
-                            
-                            # 更新统计信息
-                            state.gesture_statistics[smoothed_prediction] = state.gesture_statistics.get(smoothed_prediction, 0) + 1
-                            
-                            # 添加到历史记录
-                            state.prediction_history.append((smoothed_prediction, confidence))
-                            if len(state.prediction_history) > state.history_size:
-                                state.prediction_history.pop(0)
-            
-            # 如果不需要显示关键点，使用原始帧
-            if not state.show_landmarks:
-                annotated_frame = frame.copy()
-            
-            # 显示结果
-            if prediction is not None and confidence > state.confidence_threshold:
-                # 使用平滑后的预测结果
-                if len(state.smooth_predictions) >= state.smooth_window:
-                    gesture_counts = {}
-                    for gest, conf in state.smooth_predictions:
-                        if conf > state.confidence_threshold:
-                            gesture_counts[gest] = gesture_counts.get(gest, 0) + 1
-                    
-                    if gesture_counts:
-                        smoothed_prediction = max(gesture_counts, key=gesture_counts.get)
-                        prediction = smoothed_prediction
-                
-                # 显示预测结果
-                text = f"手势: {prediction}"
-                confidence_text = f"置信度: {confidence:.1%}"
-                
-                # 根据置信度选择颜色
-                color = (0, 255, 0) if confidence > 0.7 else (0, 165, 255)
-                
-                # 显示文本
-                cv2.putText(annotated_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                cv2.putText(annotated_frame, confidence_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            
-            # 将BGR转换为RGB
-            rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            
-            # 更新队列
-            if self.video_queue.full():
-                self.video_queue.get()
-            self.video_queue.put(rgb_frame)
+                        # 绘制结果 (OpenCV 不支持中文，使用英文显示)
+                        # 绿色表示高置信度，橙色表示低置信度
+                        color = (0, 255, 0) if confidence > 0.8 else (0, 165, 255)
+                        
+                        cv2.putText(final_img, f"Gesture: {final_prediction}", (20, 50), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+                        cv2.putText(final_img, f"Conf: {confidence:.2f}", (20, 100), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-# 初始化视频处理器
-video_processor = VideoStreamProcessor()
+        # 6. 将处理后的图像转回 av.VideoFrame 返回给浏览器
+        return av.VideoFrame.from_ndarray(final_img, format="bgr24")
 
-# 页面标题
-st.title("👋 汉语手指字母识别")
+# -------------------------------------------------------------
+# UI 界面布局
+# -------------------------------------------------------------
+
+st.title("👋 汉语手指字母识别 (实时流)")
 
 # 侧边栏设置
 with st.sidebar:
     st.header("设置")
     
-    # 显示/隐藏手部关键点
-    state.show_landmarks = st.checkbox("显示手部关键点", value=True)
+    # 获取用户输入
+    show_landmarks = st.checkbox("显示骨架", value=True)
+    conf_threshold = st.slider("置信度阈值", 0.1, 1.0, 0.6, 0.05)
+    smooth_win = st.slider("平滑窗口", 1, 10, 5, 1)
     
-    # 置信度阈值滑块
-    state.confidence_threshold = st.slider(
-        "置信度阈值",
-        min_value=0.1,
-        max_value=1.0,
-        value=0.6,
-        step=0.05
-    )
-    
-    # 平滑窗口大小
-    state.smooth_window = st.slider(
-        "平滑窗口大小",
-        min_value=1,
-        max_value=10,
-        value=5,
-        step=1
-    )
-    
-    # 应用模式
-    state.mode = st.radio(
-        "应用模式",
-        ['recognition', 'learning'],
-        index=0
-    )
-    
-    # 学习模式下的手势选择
-    if state.mode == 'learning':
-        state.current_gesture = st.selectbox(
-            "选择要学习的手势",
-            classifier.LABELS if hasattr(classifier, 'LABELS') else []
-        )
-    
-    # 开始/停止按钮
-    if st.button("开始识别", type="primary"):
-        if not state.is_running:
-            state.is_running = True
-            video_processor.start()
-    
-    if st.button("停止识别"):
-        if state.is_running:
-            state.is_running = False
-            video_processor.stop()
-    
-    # 清除历史按钮
-    if st.button("清除历史"):
-        state.prediction_history = []
-        state.gesture_statistics = {}
+    st.info("提示：\n1. 首次运行请允许摄像头权限\n2. 手机端请使用 Chrome/Safari\n3. 结果将直接显示在视频上方")
 
-# 主内容区
-col1, col2 = st.columns([3, 2])
+# 主界面布局
+col1, col2 = st.columns([0.7, 0.3])
 
 with col1:
-    st.subheader("实时视频流")
-    video_placeholder = st.empty()
+    st.subheader("实时摄像头")
     
+    # 启动 WebRTC
+    ctx = webrtc_streamer(
+        key="hand-gesture",
+        mode=webrtc_streamer.WebRtcMode.SENDRECV, # 发送并接收视频
+        rtc_configuration=RTC_CONFIGURATION,      # STUN 服务器配置
+        video_processor_factory=VideoProcessor,   # 指定处理器
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
+
+    # 实时更新处理器参数
+    if ctx.video_processor:
+        ctx.video_processor.update_params(conf_threshold, smooth_win, show_landmarks)
+
 with col2:
-    st.subheader("识别结果")
-    result_placeholder = st.empty()
-    
-    st.subheader("性能指标")
-    metrics_placeholder = st.empty()
-    
-    st.subheader("识别统计")
-    stats_placeholder = st.empty()
-
-# 主循环
-while True:
-    # 显示视频流
-    if state.is_running and not video_processor.video_queue.empty():
-        frame = video_processor.video_queue.get()
-        video_placeholder.image(frame, use_column_width=True)
-    
-    # 显示识别结果
-    with result_placeholder:
-        if state.last_prediction is not None:
-            st.markdown(f"### 🎯 最近识别: {state.last_prediction}")
-            st.progress(state.last_confidence)
-            st.text(f"置信度: {state.last_confidence:.1%}")
-            
-            # 显示预测历史
-            if state.prediction_history:
-                st.text("\n预测历史:")
-                history_data = [(i+1, gest, f"{conf:.1%}") for i, (gest, conf) in enumerate(reversed(state.prediction_history[-5:]))]
-                st.table(history_data)
-        else:
-            st.info("等待手势识别...")
-    
-    # 显示性能指标
-    with metrics_placeholder:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("帧率", f"{state.performance_metrics['frame_rate']} FPS")
-        col2.metric("检测时间", f"{state.performance_metrics['detection_time']} ms")
-        col3.metric("分类时间", f"{state.performance_metrics['classification_time']} ms")
-    
-    # 显示统计信息
-    with stats_placeholder:
-        if state.gesture_statistics:
-            st.bar_chart(state.gesture_statistics)
-        else:
-            st.info("暂无统计数据")
-    
-    # 检查应用是否在运行
-    if not state.is_running:
-        # 显示占位图像
-        placeholder_img = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(placeholder_img, "点击开始识别按钮启动", (100, 240), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-        video_placeholder.image(placeholder_img, use_column_width=True)
-    
-    # 等待一小段时间
-    time.sleep(0.01)
-
+    st.subheader("状态")
+    if ctx.state.playing:
+        st.success("摄像头运行中 ✅")
+        st.write("正在进行云端实时推理...")
+    else:
+        st.warning("摄像头已停止 🛑")
+        st.write("请点击左侧 'START' 按钮")
+        
+    st.markdown("---")
+    st.markdown("""
+    **如何使用：**
+    1. 点击 **SELECT DEVICE** 选择摄像头。
+    2. 点击 **START** 开启视频流。
+    3. 将手放入画面框内。
+    4. 识别结果会以 **绿色文字** 显示在视频左上角。
+    """)
